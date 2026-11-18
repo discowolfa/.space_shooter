@@ -1,0 +1,19 @@
+# Dedicated virtual host; replace domain and certificate paths first.
+server {
+    listen 443 ssl;
+    server_name game.example.com;
+    ssl_certificate /etc/letsencrypt/live/game.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/game.example.com/privkey.pem;
+    root /var/www/space-shooter/current;
+    index index.html;
+    include /etc/nginx/mime.types;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+    add_header X-Frame-Options SAMEORIGIN always;
+    gzip on;
+    gzip_types text/css application/javascript application/json image/svg+xml;
+    location = /sw.js { add_header Cache-Control "no-cache"; }
+    location = /index.html { add_header Cache-Control "no-cache"; }
+    location /assets/ { expires 1h; try_files $uri =404; }
+    location / { try_files $uri $uri/ /index.html; }
+}

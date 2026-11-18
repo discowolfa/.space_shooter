@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#07101f" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <link rel="icon" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/icon-180.png" />
+    <title>FRONTIER · Space Shooter</title>
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <a class="brand" href="/"
+          >F<span>✦</span>RONTIER <small>SPACE COMMAND / 01</small></a
+        >
+        <div>
+          <select id="language" aria-label="Language">
+            <option value="en">EN</option>
+            <option value="es">ES</option>
+            <option value="ru">RU</option></select
+          ><button id="sound" aria-label="Sound">♪</button>
+        </div>
+      </header>
+      <main>
+        <aside>
+          <p class="eyebrow">THE OUTER RIM / 2186</p>
+          <h1>Beyond<br />the <em>frontier.</em></h1>
+          <p class="intro" id="intro"></p>
+          <nav id="nav"></nav>
+          <section id="panel"></section>
+          <footer>
+            v0.1.0 ALPHA · LOCAL PROGRESS<br />PROTOTYPE ART / NO REAL PAYMENTS
+          </footer>
+        </aside>
+        <section class="flight">
+          <div class="flight-label">
+            <span>LIVE FLIGHT FEED</span
+            ><span class="online">● SYSTEM ONLINE</span>
+          </div>
+          <div id="game"></div>
+          <div class="controls">
+            <button id="pause">Ⅱ</button><span id="hint"></span
+            ><button id="bomb">✦</button>
+          </div>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
