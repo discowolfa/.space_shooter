@@ -1,29 +1,51 @@
 import Phaser from "phaser";
 import { levels, type Save } from "./model";
+import {
+  applyBoost,
+  newBoosts,
+  tickBoosts,
+  weaponCount,
+  readyToClear,
+  rollPickup,
+  supplyPickup,
+  pickupStyle,
+  type PickupType,
+} from "./combat";
+import { combatText } from "./combat-i18n";
+type Sprite = Phaser.GameObjects.Image | Phaser.GameObjects.Rectangle;
 type Body = {
-  sprite: Phaser.GameObjects.Image;
+  sprite: Sprite;
   vx: number;
   vy: number;
   hp: number;
   kind: number;
   age: number;
+  nextShot: number;
+  final: boolean;
+};
+type Drop = {
+  sprite: Phaser.GameObjects.Container;
+  type: PickupType;
+  age: number;
+  phase: number;
 };
 export class Flight extends Phaser.Scene {
   save!: Save;
   persist!: () => void;
   done!: (win: boolean, score: number) => void;
+  onPause: () => void = () => {};
+  onStatus: (bombs: number) => void = () => {};
   player!: Phaser.GameObjects.Image;
   stars: { dot: Phaser.GameObjects.Arc; speed: number }[] = [];
   enemies: Body[] = [];
   shots: Body[] = [];
   hostile: Body[] = [];
-  drops: Body[] = [];
+  drops: Drop[] = [];
   active = false;
   paused = false;
-  onPause: () => void = () => {};
   level = 1;
   hp = 100;
-  shield = 30;
+  shield = 25;
   score = 0;
   wave = 0;
   clock = 0;
@@ -33,15 +55,31 @@ export class Flight extends Phaser.Scene {
   bombs = 1;
   boss = false;
   bossSpawned = false;
+  boosts = newBoosts();
+  missileClock = 0;
+  droneClock = 0;
+  supplyClock = 8;
+  supplyIndex = 0;
+  killsSinceDrop = 0;
+  messageLeft = 0;
+  bossWarning = 0;
   hud!: Phaser.GameObjects.Text;
   banner!: Phaser.GameObjects.Text;
+  buffHud!: Phaser.GameObjects.Text;
+  notice!: Phaser.GameObjects.Text;
+  effects!: Phaser.GameObjects.Graphics;
+  progress!: Phaser.GameObjects.Graphics;
+  drones: Phaser.GameObjects.Image[] = [];
   cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
   keys!: Record<string, Phaser.Input.Keyboard.Key>;
   constructor() {
     super("Flight");
   }
+  get words() {
+    return combatText[this.save.language];
+  }
   preload() {
-    ["player", "scout", "fighter", "bomber", "boss", "icon"].forEach((k) =>
+    ["player", "scout", "fighter", "bomber", "boss"].forEach((k) =>
       this.load.image(k, `/assets/${k}.png`),
     );
   }
@@ -50,7 +88,7 @@ export class Flight extends Phaser.Scene {
     const nebula = this.add.graphics();
     for (let i = 8; i > 0; i--)
       nebula.fillStyle(0x255b8c, 0.012).fillCircle(360, 220, i * 43);
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0; i < 100; i++)
       this.stars.push({
         dot: this.add.circle(
           Math.random() * 480,
@@ -61,23 +99,51 @@ export class Flight extends Phaser.Scene {
         ),
         speed: 15 + Math.random() * 65,
       });
-    }
-    this.player = this.add.image(240, 620, "player").setDisplaySize(66, 86);
-    this.add.text(22, 705, "SCOUT / AX-01", {
-      fontFamily: "monospace",
-      fontSize: "11px",
-      color: "#6a899e",
-    });
+    this.player = this.add
+      .image(240, 620, "player")
+      .setDisplaySize(66, 86)
+      .setDepth(3);
+    this.effects = this.add.graphics().setDepth(2);
+    for (const offset of [-1, 1])
+      this.drones.push(
+        this.add
+          .image(240 + offset * 60, 630, "player")
+          .setDisplaySize(25, 33)
+          .setTint(0x95e9ed)
+          .setDepth(3)
+          .setVisible(false),
+      );
     this.hud = this.add
-      .text(20, 18, "", {
+      .text(16, 14, "", {
         fontFamily: "monospace",
-        fontSize: "13px",
-        color: "#aeeae7",
-        lineSpacing: 9,
+        fontSize: "15px",
+        color: "#c5eceb",
+        lineSpacing: 6,
       })
       .setDepth(10);
+    this.progress = this.add.graphics().setDepth(10);
+    this.buffHud = this.add
+      .text(16, 100, "", {
+        fontFamily: "monospace",
+        fontSize: "13px",
+        color: "#ffe7a1",
+        lineSpacing: 5,
+      })
+      .setDepth(10);
+    this.notice = this.add
+      .text(240, 156, "", {
+        align: "center",
+        fontFamily: "Arial",
+        fontSize: "17px",
+        color: "#c3ffee",
+        backgroundColor: "#0d2535",
+        padding: { x: 12, y: 7 },
+      })
+      .setOrigin(0.5)
+      .setDepth(11)
+      .setVisible(false);
     this.banner = this.add
-      .text(240, 340, "FRONTIER\n\nFLIGHT SYSTEM READY", {
+      .text(240, 330, "FRONTIER", {
         align: "center",
         fontFamily: "monospace",
         fontSize: "18px",
@@ -93,10 +159,12 @@ export class Flight extends Phaser.Scene {
     this.keys.ESC.on("down", () => this.toggle());
   }
   start(level: number) {
-    for (const list of [this.enemies, this.shots, this.hostile, this.drops]) {
+    for (const list of [this.enemies, this.shots, this.hostile]) {
       list.forEach((b) => b.sprite.destroy());
       list.length = 0;
     }
+    this.drops.forEach((d) => d.sprite.destroy());
+    this.drops = [];
     this.level = level;
     this.hp = 80 + this.save.upgrades.armor * 20;
     this.shield = this.save.upgrades.shield * 25;
@@ -105,19 +173,32 @@ export class Flight extends Phaser.Scene {
     this.clock = 0;
     this.fire = 0;
     this.spawn = 0;
-    this.invincible = 0;
+    this.invincible = 1.5;
     this.bombs = 1;
     this.boss = false;
     this.bossSpawned = false;
     this.paused = false;
     this.active = true;
-    this.player.setPosition(240, 620).setAlpha(1);
+    this.boosts = newBoosts();
+    this.missileClock = 1;
+    this.droneClock = 0;
+    this.supplyClock = 8;
+    this.supplyIndex = 0;
+    this.killsSinceDrop = 0;
+    this.messageLeft = 0;
+    this.bossWarning = 0;
+    this.player.setPosition(240, 620).setAlpha(1).clearTint();
     this.banner.setText("");
+    this.notice.setVisible(false);
+    this.buffHud.setText("");
+    this.effects.clear();
+    this.drones.forEach((d) => d.setVisible(false));
+    this.onStatus(this.bombs);
   }
   toggle() {
     if (!this.active) return;
     this.paused = !this.paused;
-    this.banner.setText(this.paused ? "Ⅱ" : "");
+    this.banner.setText("");
     this.onPause();
   }
   tone(freq = 300) {
@@ -130,34 +211,39 @@ export class Flight extends Phaser.Scene {
       o.type = "sine";
       o.frequency.setValueAtTime(freq, context.currentTime);
       o.frequency.exponentialRampToValueAtTime(60, context.currentTime + 0.1);
-      g.gain.setValueAtTime(0.035, context.currentTime);
+      g.gain.setValueAtTime(0.025, context.currentTime);
       g.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.13);
       o.connect(g).connect(context.destination);
       o.start();
       o.stop(context.currentTime + 0.14);
     } catch {}
   }
-  body(x: number, y: number, kind: number, hp: number): Body {
-    const key =
-      kind === 3
-        ? "boss"
-        : kind === 2
-          ? "bomber"
-          : kind === 1
-            ? "fighter"
-            : "scout";
+  body(x: number, y: number, kind: number, hp: number, final = false): Body {
     return {
       sprite: this.add
-        .image(x, y, key)
+        .image(
+          x,
+          y,
+          kind === 3
+            ? "boss"
+            : kind === 2
+              ? "bomber"
+              : kind === 1
+                ? "fighter"
+                : "scout",
+        )
         .setDisplaySize(
           kind === 3 ? 200 : kind === 2 ? 65 : 46,
           kind === 3 ? 140 : kind === 2 ? 65 : 50,
-        ),
+        )
+        .setDepth(2),
       vx: 0,
-      vy: kind === 3 ? 0 : 65 + this.level * 12,
+      vy: kind === 3 ? 0 : 68 + this.level * 7 + Math.min(this.wave, 20) * 1.3,
       hp,
       kind,
       age: 0,
+      nextShot: 1.6 + Math.random() * 0.7,
+      final,
     };
   }
   projectile(
@@ -167,31 +253,43 @@ export class Flight extends Phaser.Scene {
     vy: number,
     enemy = false,
     missile = false,
+    drone = false,
   ) {
-    const g = this.add
+    const color = enemy
+      ? 0xff7d7d
+      : missile
+        ? 0xffc27c
+        : drone
+          ? 0xa2d8ff
+          : this.boosts.power > 0
+            ? 0xffe49a
+            : 0x9cfff0;
+    const sprite = this.add
       .rectangle(
         x,
         y,
-        missile ? 6 : 3,
-        missile ? 18 : 13,
-        enemy ? 0xff7d7d : 0x9cfff0,
+        missile ? 6 : this.boosts.power > 1 && !enemy ? 5 : 3,
+        missile ? 18 : 15,
+        color,
       )
       .setDepth(2);
     const b = {
-      sprite: g as unknown as Phaser.GameObjects.Image,
+      sprite,
       vx,
       vy,
       hp: 1,
-      kind: missile ? 1 : 0,
+      kind: missile ? 1 : drone ? 2 : 0,
       age: 0,
+      nextShot: 0,
+      final: false,
     };
     (enemy ? this.hostile : this.shots).push(b);
   }
   burst(x: number, y: number, color = 0x8effdf) {
     for (let i = 0; i < 12; i++) {
-      const p = this.add.circle(x, y, Math.random() * 3 + 1, color);
-      const angle = Math.random() * Math.PI * 2;
-      const d = 20 + Math.random() * 45;
+      const p = this.add.circle(x, y, Math.random() * 3 + 1, color).setDepth(4);
+      const angle = Math.random() * Math.PI * 2,
+        d = 20 + Math.random() * 45;
       this.tweens.add({
         targets: p,
         x: x + Math.cos(angle) * d,
@@ -202,15 +300,79 @@ export class Flight extends Phaser.Scene {
       });
     }
   }
+  spawnPickup(type: PickupType, x = 70 + Math.random() * 340, y = -30) {
+    if (this.drops.length >= 10) return;
+    const style = pickupStyle[type];
+    const ring = this.add
+      .circle(0, 0, 22, style.color, 0.12)
+      .setStrokeStyle(2, style.color);
+    const plate = this.add
+      .rectangle(0, 0, 27, 27, 0x0b1e2c, 0.95)
+      .setStrokeStyle(1, style.color)
+      .setAngle(45);
+    const symbol = this.add
+      .text(0, 0, style.symbol, {
+        fontFamily: "monospace",
+        fontSize: "20px",
+        fontStyle: "bold",
+        color: "#" + style.color.toString(16).padStart(6, "0"),
+      })
+      .setOrigin(0.5);
+    const label = this.add
+      .text(0, 33, this.words[type], {
+        fontFamily: "Arial",
+        fontSize: "11px",
+        color: "#d9edf0",
+        backgroundColor: "#071523",
+        padding: { x: 4, y: 2 },
+      })
+      .setOrigin(0.5);
+    const sprite = this.add
+      .container(Phaser.Math.Clamp(x, 64, 416), y, [ring, plate, symbol, label])
+      .setDepth(5);
+    this.drops.push({
+      sprite,
+      type,
+      age: 0,
+      phase: Math.random() * Math.PI * 2,
+    });
+  }
+  collect(type: PickupType) {
+    const before = weaponCount(this.save.upgrades.weapon, this.boosts);
+    applyBoost(this.boosts, type);
+    if (type === "repair")
+      this.hp = Math.min(80 + this.save.upgrades.armor * 20, this.hp + 35);
+    if (type === "shield")
+      this.shield = Math.min(
+        this.save.upgrades.shield * 25 + 40,
+        this.shield + 45,
+      );
+    if (type === "nova") this.bombs = Math.min(3, this.bombs + 1);
+    if (type === "power" && before === 5) {
+      this.boosts.rapid = Math.min(30, this.boosts.rapid + 8);
+    }
+    this.notice
+      .setText(
+        this.words[type] +
+          (type === "power"
+            ? " " + weaponCount(this.save.upgrades.weapon, this.boosts) + "/5"
+            : ""),
+      )
+      .setVisible(true);
+    this.messageLeft = 2.3;
+    this.burst(this.player.x, this.player.y, pickupStyle[type].color);
+    this.onStatus(this.bombs);
+    this.tone(950);
+  }
   kill(b: Body) {
+    if (!b.sprite.active) return;
     this.burst(b.sprite.x, b.sprite.y, b.kind === 3 ? 0xffd08a : 0x83e4df);
     this.score += b.kind === 3 ? 2000 : 100 * (b.kind + 1);
     this.save.crystals += b.kind === 3 ? 100 : 5 * (b.kind + 1);
-    if (Math.random() < 0.2) {
-      const d = this.body(b.sprite.x, b.sprite.y, 0, 1);
-      d.sprite.setTexture("icon").setDisplaySize(22, 22);
-      d.vy = 85;
-      this.drops.push(d);
+    this.killsSinceDrop++;
+    if (b.kind !== 3 && (Math.random() < 0.32 || this.killsSinceDrop >= 4)) {
+      this.spawnPickup(rollPickup(), b.sprite.x, b.sprite.y);
+      this.killsSinceDrop = 0;
     }
     b.hp = 0;
     b.sprite.destroy();
@@ -220,21 +382,23 @@ export class Flight extends Phaser.Scene {
   nova() {
     if (!this.active || this.paused || this.bombs < 1) return;
     this.bombs--;
+    this.onStatus(this.bombs);
     this.cameras.main.flash(250, 120, 220, 210);
     this.hostile.forEach((b) => b.sprite.destroy());
     this.hostile = [];
     for (const b of this.enemies) {
-      b.hp -= 90;
+      if (b.hp <= 0) continue;
+      b.hp -= 100;
       if (b.hp <= 0) this.kill(b);
     }
     this.tone(70);
   }
   damage(amount: number) {
-    if (this.invincible > 0) return;
+    if (!this.active || this.invincible > 0) return;
     const absorbed = Math.min(this.shield, amount);
     this.shield -= absorbed;
-    this.hp -= amount - absorbed;
-    this.invincible = 1;
+    this.hp = Math.max(0, this.hp - (amount - absorbed));
+    this.invincible = 1.2;
     this.cameras.main.shake(120, 0.008);
     if (this.hp <= 0) this.end(false);
   }
@@ -244,8 +408,42 @@ export class Flight extends Phaser.Scene {
     this.player.setAlpha(1);
     this.done(win, this.score);
   }
+  spawnWave() {
+    const config = levels[this.level - 1];
+    this.wave++;
+    this.spawn = config.interval;
+    const final = this.wave === config.waves;
+    const count = final ? 6 : 3 + Math.min(3, Math.floor(this.wave / 5));
+    for (let i = 0; i < count; i++) {
+      const formation = this.wave % 3;
+      const x =
+        formation === 0
+          ? 80 + i * (320 / Math.max(1, count - 1))
+          : formation === 1
+            ? 240 + (i % 2 ? 1 : -1) * Math.ceil(i / 2) * 57
+            : 65 + i * (350 / Math.max(1, count - 1));
+      const y =
+        formation === 1
+          ? -50 - Math.abs(i - (count - 1) / 2) * 55
+          : -50 - i * 36;
+      const kind = (this.wave + i) % 3;
+      this.enemies.push(
+        this.body(
+          x,
+          y,
+          kind,
+          16 + this.level * 5 + kind * 9 + Math.floor(this.wave / 4) * 3,
+          final,
+        ),
+      );
+    }
+    if (final) {
+      this.notice.setText(this.words.final).setVisible(true);
+      this.messageLeft = 3;
+    }
+  }
   update(_time: number, delta: number) {
-    const dt = Math.min(delta, 40) / 1000;
+    const dt = Math.min(delta, 50) / 1000;
     if (this.paused) return;
     for (const s of this.stars) {
       s.dot.y += s.speed * dt;
@@ -257,15 +455,19 @@ export class Flight extends Phaser.Scene {
     if (!this.active) return;
     this.clock += dt;
     this.invincible -= dt;
+    tickBoosts(this.boosts, dt);
+    this.messageLeft -= dt;
+    if (this.messageLeft <= 0) this.notice.setVisible(false);
     this.player.setAlpha(
-      this.invincible > 0 ? 0.45 + Math.sin(this.clock * 35) * 0.3 : 1,
+      this.invincible > 0 ? 0.6 + Math.sin(this.clock * 35) * 0.25 : 1,
     );
+    this.player.setTint(this.boosts.power > 0 ? 0xffe8b9 : 0xffffff);
     let dx =
-      Number(this.cursors.right.isDown || this.keys.D.isDown) -
-      Number(this.cursors.left.isDown || this.keys.A.isDown);
-    let dy =
-      Number(this.cursors.down.isDown || this.keys.S.isDown) -
-      Number(this.cursors.up.isDown || this.keys.W.isDown);
+        Number(this.cursors.right.isDown || this.keys.D.isDown) -
+        Number(this.cursors.left.isDown || this.keys.A.isDown),
+      dy =
+        Number(this.cursors.down.isDown || this.keys.S.isDown) -
+        Number(this.cursors.up.isDown || this.keys.W.isDown);
     if (dx || dy) {
       const len = Math.hypot(dx, dy);
       this.player.x += (dx / len) * 310 * dt;
@@ -285,65 +487,138 @@ export class Flight extends Phaser.Scene {
       );
     }
     this.player.x = Phaser.Math.Clamp(this.player.x, 25, 455);
-    this.player.y = Phaser.Math.Clamp(this.player.y, 90, 700);
+    this.player.y = Phaser.Math.Clamp(this.player.y, 160, 700);
     this.fire -= dt;
+    this.missileClock -= dt;
+    this.droneClock -= dt;
     if (this.fire <= 0) {
-      this.fire = 0.22;
-      const n = this.save.upgrades.weapon;
+      this.fire = this.boosts.rapid > 0 ? 0.105 : 0.23;
+      const n = weaponCount(this.save.upgrades.weapon, this.boosts);
       for (let i = 0; i < n; i++)
         this.projectile(
-          this.player.x + (i - (n - 1) / 2) * 13,
+          this.player.x + (i - (n - 1) / 2) * 12,
           this.player.y - 34,
-          (i - (n - 1) / 2) * 35,
+          (i - (n - 1) / 2) * 46,
           -550,
         );
-      if (Math.floor(this.clock * 5) % 12 === 0)
-        this.projectile(this.player.x, this.player.y, 0, -330, false, true);
       this.tone(600);
     }
-    this.spawn -= dt;
-    if (this.spawn <= 0 && this.wave < levels[this.level - 1].waves) {
-      this.spawn = 4.5;
-      this.wave++;
-      for (let i = 0; i < 4; i++)
-        this.enemies.push(
-          this.body(
-            65 + i * 115,
-            -50 - i * 45,
-            (this.wave + i) % 3,
-            15 + this.level * 6 + ((this.wave + i) % 3) * 10,
-          ),
+    if (this.missileClock <= 0) {
+      this.missileClock = this.boosts.missiles > 0 ? 0.65 : 2.8;
+      for (const x of this.boosts.missiles > 0 ? [-22, 22] : [0])
+        this.projectile(
+          this.player.x + x,
+          this.player.y - 20,
+          0,
+          -330,
+          false,
+          true,
         );
     }
+    for (let i = 0; i < 2; i++) {
+      const drone = this.drones[i];
+      drone
+        .setVisible(this.boosts.drone > 0)
+        .setPosition(
+          Phaser.Math.Clamp(this.player.x + (i ? 1 : -1) * 54, 14, 466),
+          this.player.y + 12 + Math.sin(this.clock * 3 + i) * 9,
+        );
+      if (this.boosts.drone > 0 && this.droneClock <= 0)
+        this.projectile(
+          drone.x,
+          drone.y - 18,
+          (i ? 1 : -1) * 20,
+          -560,
+          false,
+          false,
+          true,
+        );
+    }
+    if (this.droneClock <= 0) this.droneClock = 0.28;
+    this.effects.clear();
+    if (this.shield > 0)
+      this.effects
+        .lineStyle(2, 0x72caff, 0.25 + Math.sin(this.clock * 3) * 0.1)
+        .strokeEllipse(this.player.x, this.player.y, 83, 104);
+    if (this.boosts.magnet > 0)
+      this.effects
+        .lineStyle(1, 0xffee9a, 0.2)
+        .strokeCircle(this.player.x, this.player.y, 105);
+    const gunCount = weaponCount(this.save.upgrades.weapon, this.boosts);
+    if (gunCount > 1)
+      for (let i = 0; i < gunCount; i++)
+        this.effects
+          .fillStyle(this.boosts.rapid > 0 ? 0xff8ee5 : 0xffd88a, 0.9)
+          .fillCircle(
+            this.player.x + (i - (gunCount - 1) / 2) * 12,
+            this.player.y - 24,
+            3,
+          );
+    const config = levels[this.level - 1];
+    this.spawn -= dt;
+    if (this.spawn <= 0 && this.wave < config.waves) this.spawnWave();
+    this.supplyClock -= dt;
+    if (this.supplyClock <= 0) {
+      this.spawnPickup(supplyPickup(this.supplyIndex++));
+      this.supplyClock = 12 + Math.random() * 5;
+    }
     if (
-      this.wave >= levels[this.level - 1].waves &&
-      !this.enemies.some((b) => b.hp > 0)
+      readyToClear(
+        config,
+        this.clock,
+        this.wave,
+        this.enemies.filter((b) => b.hp > 0).length,
+      )
     ) {
       if (this.level === 5 && !this.bossSpawned) {
         this.bossSpawned = true;
         this.boss = true;
-        this.enemies.push(this.body(240, 120, 3, 1600));
-        this.banner.setText("BOSS INCOMING");
-        this.time.delayedCall(2000, () => this.banner.setText(""));
-      } else this.end(true);
+        this.bossWarning = 3;
+        this.banner.setText(this.words.boss).setFontSize(16);
+        this.hostile.forEach((b) => b.sprite.destroy());
+        this.hostile = [];
+      } else if (this.level !== 5 || this.bossWarning <= 0) {
+        this.end(true);
+        return;
+      }
+    }
+    if (this.bossWarning > 0) {
+      this.bossWarning -= dt;
+      if (this.bossWarning <= 0) {
+        this.banner.setText("");
+        this.enemies.push(this.body(240, 120, 3, 1800));
+      }
     }
     for (const b of this.enemies) {
       if (b.hp <= 0) continue;
       b.age += dt;
       b.sprite.y += b.vy * dt;
-      b.sprite.x +=
-        Math.sin(b.age * (b.kind === 1 ? 3 : 1)) *
-        dt *
-        (b.kind === 3 ? 65 : 25);
-      if (b.sprite.y > 800) {
-        b.hp = 0;
-        b.sprite.destroy();
-        continue;
+      b.sprite.x = Phaser.Math.Clamp(
+        b.sprite.x +
+          Math.sin(b.age * (b.kind === 1 ? 3 : 1)) *
+            dt *
+            (b.kind === 3 ? 65 : 25),
+        30,
+        450,
+      );
+      if (b.sprite.y > 810) {
+        if (b.final) {
+          b.sprite.y = -80;
+          b.nextShot = b.age + 2;
+        } else {
+          b.hp = 0;
+          b.sprite.destroy();
+          continue;
+        }
       }
-      if (
-        Math.floor((b.age - dt) * (b.kind === 3 && b.hp < 800 ? 3 : 1)) <
-        Math.floor(b.age * (b.kind === 3 && b.hp < 800 ? 3 : 1))
-      ) {
+      if (b.age >= b.nextShot && b.sprite.y > 45 && b.sprite.y < 680) {
+        b.nextShot =
+          b.age +
+          (b.kind === 3
+            ? b.hp < 900
+              ? 0.6
+              : 1.3
+            : 2.5 - Math.min(1, this.level * 0.12 + this.wave * 0.015));
         const a = Math.atan2(
           this.player.y - b.sprite.y,
           this.player.x - b.sprite.x,
@@ -352,8 +627,8 @@ export class Flight extends Phaser.Scene {
           this.projectile(
             b.sprite.x,
             b.sprite.y,
-            Math.cos(a + j * 0.22) * 160,
-            Math.sin(a + j * 0.22) * 160,
+            Math.cos(a + j * 0.22) * (b.kind === 3 ? 160 : 140),
+            Math.sin(a + j * 0.22) * (b.kind === 3 ? 160 : 140),
             true,
           );
       }
@@ -363,34 +638,45 @@ export class Flight extends Phaser.Scene {
           b.sprite.y,
           this.player.x,
           this.player.y,
-        ) < (b.kind === 3 ? 100 : 40)
+        ) < (b.kind === 3 ? 95 : 34)
       )
-        this.damage(30);
+        this.damage(24);
     }
+    if (!this.active) return;
     for (const [list, enemy] of [
       [this.shots, false],
       [this.hostile, true],
     ] as const) {
       for (const b of list) {
         if (!b.sprite.active) continue;
+        b.age += dt;
         if (b.kind === 1 && !enemy) {
-          const target = this.enemies.find((e) => e.hp > 0);
+          const target = this.enemies.find((e) => e.hp > 0 && e.sprite.y > 0);
           if (target) {
             const a = Math.atan2(
               target.sprite.y - b.sprite.y,
               target.sprite.x - b.sprite.x,
             );
-            b.vx = Phaser.Math.Linear(b.vx, Math.cos(a) * 400, 0.1);
-            b.vy = Phaser.Math.Linear(b.vy, Math.sin(a) * 400, 0.1);
+            b.vx = Phaser.Math.Linear(
+              b.vx,
+              Math.cos(a) * 400,
+              Math.min(1, dt * 6),
+            );
+            b.vy = Phaser.Math.Linear(
+              b.vy,
+              Math.sin(a) * 400,
+              Math.min(1, dt * 6),
+            );
           }
         }
         b.sprite.x += b.vx * dt;
         b.sprite.y += b.vy * dt;
         if (
-          b.sprite.y < -40 ||
-          b.sprite.y > 800 ||
-          b.sprite.x < -30 ||
-          b.sprite.x > 510
+          b.age > 6 ||
+          b.sprite.y < -60 ||
+          b.sprite.y > 820 ||
+          b.sprite.x < -40 ||
+          b.sprite.x > 520
         ) {
           b.sprite.destroy();
           continue;
@@ -402,10 +688,10 @@ export class Flight extends Phaser.Scene {
               b.sprite.y,
               this.player.x,
               this.player.y,
-            ) < 24
+            ) < 20
           ) {
             b.sprite.destroy();
-            this.damage(18);
+            this.damage(15);
           }
         } else
           for (const e of this.enemies) {
@@ -418,7 +704,12 @@ export class Flight extends Phaser.Scene {
                 b.sprite.y,
               ) < (e.kind === 3 ? 85 : 28)
             ) {
-              e.hp -= b.kind === 1 ? 35 : 12;
+              e.hp -=
+                b.kind === 1
+                  ? 40
+                  : b.kind === 2
+                    ? 9
+                    : 12 + Math.min(3, this.boosts.power) * 2;
               b.sprite.destroy();
               if (e.hp <= 0) this.kill(e);
               break;
@@ -426,31 +717,55 @@ export class Flight extends Phaser.Scene {
           }
       }
     }
-    for (const b of this.drops) {
-      b.sprite.y += b.vy * dt;
-      if (
-        Phaser.Math.Distance.Between(
-          b.sprite.x,
-          b.sprite.y,
-          this.player.x,
-          this.player.y,
-        ) < 35
-      ) {
-        this.hp = Math.min(80 + this.save.upgrades.armor * 20, this.hp + 20);
-        this.shield = Math.min(
-          this.save.upgrades.shield * 25,
-          this.shield + 15,
-        );
-        b.sprite.destroy();
-      } else if (b.sprite.y > 800) b.sprite.destroy();
+    if (!this.active) return;
+    for (const d of this.drops) {
+      d.age += dt;
+      const distance = Phaser.Math.Distance.Between(
+        d.sprite.x,
+        d.sprite.y,
+        this.player.x,
+        this.player.y,
+      );
+      const magnet = this.boosts.magnet > 0 && distance < 230;
+      if (magnet && distance > 1) {
+        d.sprite.x += ((this.player.x - d.sprite.x) / distance) * 250 * dt;
+        d.sprite.y += ((this.player.y - d.sprite.y) / distance) * 250 * dt;
+      } else {
+        d.sprite.y += 64 * dt;
+        d.sprite.x += Math.sin(d.age * 2 + d.phase) * 12 * dt;
+      }
+      d.sprite.setScale(1 + Math.sin(d.age * 4) * 0.06);
+      if (distance < 40) {
+        this.collect(d.type);
+        d.sprite.destroy();
+      } else if (d.sprite.y > 820 || d.age > 20) d.sprite.destroy();
     }
     this.enemies = this.enemies.filter((b) => b.hp > 0);
     this.shots = this.shots.filter((b) => b.sprite.active);
     this.hostile = this.hostile.filter((b) => b.sprite.active);
-    this.drops = this.drops.filter((b) => b.sprite.active);
+    this.drops = this.drops.filter((d) => d.sprite.active);
+    const timer = Math.floor(this.clock),
+      boss = this.enemies.find((e) => e.kind === 3);
+    const progress = Math.min(1, this.clock / config.duration);
     this.hud.setText(
-      `${String(this.level).padStart(2, "0")} / SECTOR     ${String(this.score).padStart(6, "0")}\nHP ${Math.ceil(this.hp)}  ◇ ${Math.ceil(this.shield)}  ✦ ${this.save.crystals}\n${this.boss ? "DESTROYER " + Math.max(0, Math.ceil((this.enemies[0]?.hp ?? 0) / 16)) + "%" : "WAVE " + this.wave + " / " + levels[this.level - 1].waves}`,
+      `${this.words.sector} ${this.level}   ${String(this.score).padStart(6, "0")}   ${Math.floor(timer / 60)}:${String(timer % 60).padStart(2, "0")}\nHP ${Math.ceil(this.hp)}   S ${Math.ceil(this.shield)}   ◇ ${this.save.crystals}\n${this.boss ? "BOSS " + Math.max(0, Math.ceil((boss?.hp ?? 1800) / 18)) + "%" : this.words.wave + " " + this.wave + "/" + config.waves}   P ${gunCount}/5   N ${this.bombs}`,
     );
+    this.progress
+      .clear()
+      .fillStyle(0x203c4b)
+      .fillRoundedRect(16, 86, 448, 4, 2)
+      .fillStyle(this.boss ? 0xff8a93 : 0x99dfd3)
+      .fillRoundedRect(
+        16,
+        86,
+        448 * (this.boss ? Math.max(0, (boss?.hp ?? 1800) / 1800) : progress),
+        4,
+        2,
+      );
+    const timers = (["rapid", "missiles", "drone", "magnet"] as const)
+      .filter((k) => this.boosts[k] > 0)
+      .map((k) => `${pickupStyle[k].symbol} ${Math.ceil(this.boosts[k])}s`);
+    this.buffHud.setText(timers.join("   "));
   }
 }
 let audio: AudioContext | undefined;

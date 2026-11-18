@@ -37,7 +37,12 @@ const persist = () => {
   void store(save).catch(() => notify(t().error));
 };
 scene.persist = persist;
-const game = new Phaser.Game({
+scene.onStatus = (count) => {
+  $("#bomb").textContent = `✦ ${count}`;
+  ($("#bomb") as HTMLButtonElement).disabled =
+    !scene.active || scene.paused || count === 0;
+};
+export const game = new Phaser.Game({
   type: Phaser.AUTO,
   parent: "game",
   width: 480,
@@ -78,7 +83,7 @@ function resume() {
   scene.banner.setText("");
   document.body.classList.add("playing");
   $("#overlay").hidden = true;
-  ($("#bomb") as HTMLButtonElement).disabled = false;
+  scene.onStatus(scene.bombs);
   $("#pause").focus();
 }
 function launch() {

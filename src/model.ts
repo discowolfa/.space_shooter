@@ -1,9 +1,39 @@
 export const levels = [
-  { name: "The quiet belt", waves: 5, color: 0x264873 },
-  { name: "Crimson passage", waves: 6, color: 0x623354 },
-  { name: "Ghost signal", waves: 7, color: 0x235858 },
-  { name: "Event horizon", waves: 8, color: 0x493770 },
-  { name: "The destroyer", waves: 6, color: 0x733a40 },
+  {
+    name: "The quiet belt",
+    waves: 16,
+    interval: 7.5,
+    duration: 120,
+    color: 0x264873,
+  },
+  {
+    name: "Crimson passage",
+    waves: 18,
+    interval: 7.5,
+    duration: 135,
+    color: 0x623354,
+  },
+  {
+    name: "Ghost signal",
+    waves: 20,
+    interval: 7.5,
+    duration: 150,
+    color: 0x235858,
+  },
+  {
+    name: "Event horizon",
+    waves: 22,
+    interval: 7.5,
+    duration: 165,
+    color: 0x493770,
+  },
+  {
+    name: "The destroyer",
+    waves: 22,
+    interval: 7.5,
+    duration: 165,
+    color: 0x733a40,
+  },
 ];
 export type Upgrade = "weapon" | "armor" | "shield";
 export interface Save {
