@@ -14,41 +14,37 @@
   </head>
   <body>
     <div id="app">
-      <header>
-        <a class="brand" href="/"
-          >F<span>✦</span>RONTIER <small>SPACE COMMAND / 01</small></a
-        >
-        <div>
+      <header class="topbar">
+        <span class="brand">F<span>✦</span>RONTIER</span>
+        <div class="preferences">
           <select id="language" aria-label="Language">
             <option value="en">EN</option>
             <option value="es">ES</option>
             <option value="ru">RU</option></select
-          ><button id="sound" aria-label="Sound">♪</button>
+          ><button id="sound" aria-label="Sound">♪</button
+          ><button id="update" hidden>↻</button>
         </div>
       </header>
-      <main>
-        <aside>
-          <p class="eyebrow">THE OUTER RIM / 2186</p>
-          <h1>Beyond<br />the <em>frontier.</em></h1>
-          <p class="intro" id="intro"></p>
-          <nav id="nav"></nav>
-          <section id="panel"></section>
-          <footer>
-            v0.1.0 ALPHA · LOCAL PROGRESS<br />PROTOTYPE ART / NO REAL PAYMENTS
-          </footer>
-        </aside>
-        <section class="flight">
-          <div class="flight-label">
-            <span>LIVE FLIGHT FEED</span
-            ><span class="online">● SYSTEM ONLINE</span>
-          </div>
-          <div id="game"></div>
-          <div class="controls">
-            <button id="pause">Ⅱ</button><span id="hint"></span
-            ><button id="bomb">✦</button>
-          </div>
-        </section>
+      <main class="arena">
+        <div id="game" aria-label="Space Shooter"></div>
+        <div id="overlay">
+          <section class="menu-card" aria-labelledby="menu-title">
+            <div class="menu-top">
+              <span class="eyebrow">SPACE COMMAND</span
+              ><span id="balance"></span>
+            </div>
+            <div id="menu-scroll"><section id="panel"></section></div>
+            <div class="menu-bottom">
+              <button id="back"></button><small>v0.1.0 α · FRONTIER</small>
+            </div>
+          </section>
+        </div>
+        <div id="toast" role="status" hidden></div>
       </main>
+      <footer class="controls">
+        <button id="pause">☰</button><span id="hint"></span
+        ><button id="bomb">✦</button>
+      </footer>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

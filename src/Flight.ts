@@ -20,6 +20,7 @@ export class Flight extends Phaser.Scene {
   drops: Body[] = [];
   active = false;
   paused = false;
+  onPause: () => void = () => {};
   level = 1;
   hp = 100;
   shield = 30;
@@ -117,6 +118,7 @@ export class Flight extends Phaser.Scene {
     if (!this.active) return;
     this.paused = !this.paused;
     this.banner.setText(this.paused ? "Ⅱ" : "");
+    this.onPause();
   }
   tone(freq = 300) {
     if (!this.save?.sound) return;

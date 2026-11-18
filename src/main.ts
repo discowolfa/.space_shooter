@@ -1,5 +1,6 @@
 import Phaser from "phaser";
 import "./style.css";
+import { registerSW } from "virtual:pwa-register";
 import { Flight } from "./Flight";
 import { load, store } from "./storage";
 import {
@@ -17,13 +18,26 @@ const scene = new Flight();
 scene.save = save;
 const $ = (s: string) => document.querySelector(s) as HTMLElement;
 const t = () => strings[save.language];
+type Page =
+  | "home"
+  | "pause"
+  | "hangar"
+  | "map"
+  | "settings"
+  | "scores"
+  | "support"
+  | "result";
+let current: Page = "home";
+let result = { win: false, score: 0 };
+function notify(message: string) {
+  $("#toast").textContent = message;
+  $("#toast").hidden = false;
+}
 const persist = () => {
-  void store(save).catch(() => {
-    $("#panel").textContent = t().error;
-  });
+  void store(save).catch(() => notify(t().error));
 };
 scene.persist = persist;
-new Phaser.Game({
+const game = new Phaser.Game({
   type: Phaser.AUTO,
   parent: "game",
   width: 480,
@@ -34,172 +48,233 @@ new Phaser.Game({
   input: { activePointers: 2 },
   audio: { noAudio: true },
 });
-function button(label: string, action: () => void, disabled = false) {
+// Refresh Safari's viewport outside layout observation.
+let resizeTimer: ReturnType<typeof setTimeout>;
+window.visualViewport?.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => game.scale?.refresh(), 100);
+});
+function button(
+  label: string,
+  action: () => void,
+  disabled = false,
+  primary = false,
+) {
   const b = document.createElement("button");
   b.textContent = label;
   b.disabled = disabled;
+  b.classList.toggle("primary", primary);
   b.onclick = action;
   return b;
 }
-function panel(title: string) {
-  $("#panel").replaceChildren();
+function text(content: string) {
+  const p = document.createElement("p");
+  p.textContent = content;
+  return p;
+}
+function resume() {
+  if (!scene.active) return;
+  scene.paused = false;
+  scene.banner.setText("");
+  document.body.classList.add("playing");
+  $("#overlay").hidden = true;
+  ($("#bomb") as HTMLButtonElement).disabled = false;
+  $("#pause").focus();
+}
+function launch() {
+  if (!scene.player) return;
+  save.checkpoint = selected;
+  persist();
+  scene.start(selected);
+  resume();
+  void navigator.storage?.persist?.();
+}
+function show(page: Page) {
+  current = page;
+  if (scene.active) {
+    scene.paused = true;
+    scene.banner.setText("");
+  }
+  document.body.classList.remove("playing");
+  $("#overlay").hidden = false;
+  ($("#bomb") as HTMLButtonElement).disabled = true;
+  $("#balance").textContent = `${save.crystals} ◇`;
+  const p = $("#panel");
+  p.replaceChildren();
+  $("#menu-scroll").scrollTop = 0;
+  const titles = {
+    home: "FRONTIER",
+    pause: t().pause,
+    hangar: t().hangar,
+    map: t().map,
+    settings: t().settings,
+    scores: t().scores,
+    support: t().support,
+    result: result.win ? t().win : t().lose,
+  };
   const h = document.createElement("h2");
-  h.textContent = title;
-  $("#panel").append(h);
-  return $("#panel");
-}
-function menu() {
-  const p = panel(
-    `${t().mission} ${String(selected).padStart(2, "0")} / ${levels[selected - 1].name}`,
-  );
-  const subtitle = document.createElement("p");
-  subtitle.textContent = `AX-01 SCOUT · ${save.crystals} ◇`;
-  p.append(
-    subtitle,
-    button(t().play, () => {
-      if (!scene.player) return;
-      save.checkpoint = selected;
-      persist();
-      scene.start(selected);
-      p.replaceChildren(
-        button(t().pause, () => scene.toggle()),
-        button(t().back, () => {
-          scene.active = false;
-          menu();
-        }),
-      );
-      void navigator.storage?.persist?.();
-    }),
-  );
-}
-function hangar() {
-  const p = panel(t().hangar);
-  const balance = document.createElement("p");
-  balance.textContent = `${save.crystals} ◇`;
-  p.append(balance);
-  for (const key of ["weapon", "armor", "shield"] as Upgrade[])
+  h.id = "menu-title";
+  h.textContent = titles[page];
+  p.append(h);
+  const back = $("#back");
+  back.hidden = page === "home";
+  back.textContent = scene.active ? t().pause : t().back;
+  back.onclick = () => show(scene.active ? "pause" : "home");
+  if (page === "home") {
+    h.hidden = true;
+    const hero = document.createElement("div");
+    hero.className = "hero";
+    hero.innerHTML =
+      '<div><h1>FRONTIER</h1><small>THE OUTER RIM / 2186</small></div><img src="/assets/player.png" alt="AX-01 Scout" width="76" height="100">';
+    p.append(hero);
+    const info = text(
+      `${t().mission} ${String(selected).padStart(2, "0")} · ${levels[selected - 1].name}`,
+    );
+    info.className = "mission-line";
+    p.append(info, button(t().play, launch, false, true));
+    const nav = document.createElement("nav");
+    nav.className = "menu-grid";
+    for (const key of [
+      "map",
+      "hangar",
+      "scores",
+      "settings",
+      "support",
+    ] as const)
+      nav.append(button(t()[key], () => show(key)));
+    p.append(nav);
+  } else if (page === "pause") {
     p.append(
-      button(
-        `${t()[key]} ${save.upgrades[key]}/3 · ${save.upgrades[key] === 3 ? "MAX" : cost(save.upgrades[key]) + " ◇"}`,
-        () => {
-          if (purchase(save, key)) {
-            persist();
-            hangar();
-          }
-        },
-        save.upgrades[key] >= 3 || save.crystals < cost(save.upgrades[key]),
+      text(`${t().mission} ${scene.level} · ${scene.score}`),
+      button(t().resume, resume, false, true),
+    );
+    const nav = document.createElement("nav");
+    nav.className = "menu-grid pause-grid";
+    for (const key of ["hangar", "settings"] as const)
+      nav.append(button(t()[key], () => show(key)));
+    p.append(
+      nav,
+      button(t().back, () => {
+        scene.active = false;
+        show("home");
+      }),
+    );
+    back.hidden = true;
+  } else if (page === "hangar") {
+    for (const key of ["weapon", "armor", "shield"] as Upgrade[])
+      p.append(
+        button(
+          `${t()[key]} ${save.upgrades[key]}/3 · ${save.upgrades[key] === 3 ? "MAX" : cost(save.upgrades[key]) + " ◇"}`,
+          () => {
+            if (purchase(save, key)) {
+              persist();
+              show("hangar");
+            }
+          },
+          save.upgrades[key] >= 3 || save.crystals < cost(save.upgrades[key]),
+        ),
+      );
+  } else if (page === "map") {
+    levels.forEach((l, i) =>
+      p.append(
+        button(
+          `${String(i + 1).padStart(2, "0")} · ${l.name}${i + 1 > save.unlocked ? " / " + t().locked : ""}`,
+          () => {
+            selected = i + 1;
+            show("home");
+          },
+          i + 1 > save.unlocked,
+        ),
       ),
     );
-}
-function map() {
-  const p = panel(t().map);
-  levels.forEach((l, i) =>
+  } else if (page === "settings") {
     p.append(
+      text(t().saved),
+      button(t().export, () => {
+        const url = URL.createObjectURL(
+          new Blob([JSON.stringify(save, null, 2)], {
+            type: "application/json",
+          }),
+        );
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "frontier-save.json";
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }),
+    );
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json";
+    input.setAttribute("aria-label", t().import);
+    input.onchange = async () => {
+      try {
+        const file = input.files?.[0];
+        if (!file || file.size > 100000) throw Error();
+        const next = validate(JSON.parse(await file.text()));
+        if (!confirm(t().import + "?")) return;
+        await store(next);
+        scene.active = false;
+        Object.assign(save, next);
+        selected = save.checkpoint;
+        render();
+        show("settings");
+      } catch {
+        notify(t().error);
+      }
+    };
+    p.append(text(t().import), input, text(t().install));
+  } else if (page === "scores") {
+    if (!save.scores.length) p.append(text("—"));
+    save.scores.forEach((s, i) =>
+      p.append(text(`${String(i + 1).padStart(2, "0")} · ${s}`)),
+    );
+  } else if (page === "support") p.append(text(t().disabled));
+  else if (page === "result")
+    p.append(
+      text(`${result.score} · ${save.crystals} ◇`),
       button(
-        `${String(i + 1).padStart(2, "0")} · ${l.name}${i + 1 > save.unlocked ? " / " + t().locked : ""}`,
+        t().back,
         () => {
-          selected = i + 1;
-          menu();
+          selected = save.checkpoint;
+          show("home");
         },
-        i + 1 > save.unlocked,
+        false,
+        true,
       ),
-    ),
-  );
-}
-function settings() {
-  const p = panel(t().settings);
-  const info = document.createElement("p");
-  info.textContent = t().saved + " " + t().install;
-  p.append(
-    info,
-    button(t().export, () => {
-      const url = URL.createObjectURL(
-        new Blob([JSON.stringify(save, null, 2)], { type: "application/json" }),
-      );
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "frontier-save.json";
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    }),
-  );
-  const input = document.createElement("input");
-  input.type = "file";
-  input.accept = ".json";
-  input.setAttribute("aria-label", t().import);
-  input.onchange = async () => {
-    try {
-      const file = input.files?.[0];
-      if (!file || file.size > 100000) throw Error();
-      const next = validate(JSON.parse(await file.text()));
-      if (!confirm(t().import + "?")) return;
-      scene.active = false;
-      await store(next);
-      Object.assign(save, next);
-      selected = save.checkpoint;
-      render();
-    } catch {
-      info.textContent = t().error;
-    }
-  };
-  p.append(input);
+    );
+  requestAnimationFrame(() => {
+    p.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({
+      preventScroll: true,
+    });
+  });
 }
 scene.done = (win, score) => {
   if (win) finish(save, scene.level, score);
   else save.scores = [...save.scores, score].sort((a, b) => b - a).slice(0, 10);
   persist();
-  const p = panel(win ? t().win : t().lose);
-  const info = document.createElement("p");
-  info.textContent = `${score} POINTS · ${save.crystals} ◇`;
-  p.append(
-    info,
-    button(t().back, () => {
-      selected = save.checkpoint;
-      menu();
-    }),
-  );
+  result = { win, score };
+  show("result");
+};
+scene.onPause = () => {
+  if (scene.paused) show("pause");
+  else resume();
 };
 function render() {
-  $("#intro").textContent = t().intro;
-  $("#hint").textContent = t().hint;
   document.documentElement.lang = save.language;
   ($("#language") as HTMLSelectElement).value = save.language;
-  $("#nav").replaceChildren();
-  for (const [label, action] of [
-    [t().map, map],
-    [t().hangar, hangar],
-    [
-      t().scores,
-      () => {
-        const p = panel(t().scores);
-        save.scores.forEach((s, i) => {
-          const row = document.createElement("p");
-          row.textContent = `${i + 1}.  ${s}`;
-          p.append(row);
-        });
-      },
-    ],
-    [t().settings, settings],
-    [
-      t().support,
-      () => {
-        const p = panel(t().support);
-        const text = document.createElement("p");
-        text.textContent = t().disabled;
-        p.append(text);
-      },
-    ],
-  ] as [string, () => void][])
-    $("#nav").append(
-      button(label, () => {
-        if (scene.active) {
-          scene.paused = true;
-          scene.banner.setText("Ⅱ");
-        }
-        action();
-      }),
-    );
-  menu();
+  $("#sound").textContent = save.sound ? "♪" : "×";
+  $("#hint").textContent =
+    window.matchMedia("(pointer: coarse)").matches || window.innerWidth < 700
+      ? t().touchHint
+      : t().hint;
+  $("#pause").setAttribute("aria-label", t().pause);
+  $("#bomb").setAttribute("aria-label", "Nova");
+  show(
+    scene.active && document.body.classList.contains("playing")
+      ? "pause"
+      : current,
+  );
 }
 $("#language").onchange = () => {
   save.language = ($("#language") as HTMLSelectElement)
@@ -212,14 +287,26 @@ $("#sound").onclick = () => {
   $("#sound").textContent = save.sound ? "♪" : "×";
   persist();
 };
-$("#pause").onclick = () => scene.toggle();
+$("#pause").onclick = () => {
+  if (scene.active) {
+    if (document.body.classList.contains("playing")) show("pause");
+    else resume();
+  } else show("home");
+};
 $("#bomb").onclick = () => scene.nova();
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden && scene.active) {
-    scene.paused = true;
-    scene.banner.setText("Ⅱ");
-  }
+  if (document.hidden && scene.active) show("pause");
   persist();
 });
 window.addEventListener("pagehide", persist);
+const updateSW = registerSW({
+  onNeedRefresh() {
+    if (!scene.active) void updateSW(true);
+    else $("#update").hidden = false;
+  },
+});
+$("#update").onclick = () => {
+  if (scene.active) show("pause");
+  void updateSW(true);
+};
 render();

@@ -4,6 +4,7 @@ export default defineConfig({
   plugins: [
     VitePWA({
       registerType: "prompt",
+      injectRegister: false,
       manifest: {
         name: "Space Shooter · Frontier",
         short_name: "Frontier",
