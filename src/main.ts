@@ -12,6 +12,7 @@ import {
   type Upgrade,
 } from "./model";
 import { strings } from "./i18n";
+import { nextLevel, bosses } from "./balance";
 const save = await load();
 let selected = save.checkpoint;
 const scene = new Flight();
@@ -122,7 +123,7 @@ function show(page: Page) {
   h.textContent = titles[page];
   p.append(h);
   const back = $("#back");
-  back.hidden = page === "home";
+  back.hidden = page === "home" || page === "result";
   back.textContent = scene.active ? t().pause : t().back;
   back.onclick = () => show(scene.active ? "pause" : "home");
   if (page === "home") {
@@ -235,19 +236,37 @@ function show(page: Page) {
       p.append(text(`${String(i + 1).padStart(2, "0")} · ${s}`)),
     );
   } else if (page === "support") p.append(text(t().disabled));
-  else if (page === "result")
+  else if (page === "result") {
+    p.append(text(`${result.score} · ${save.crystals} ◇`));
+    if (result.win) {
+      p.append(
+        text(
+          `${bosses[scene.level - 1].name} · ${t().reward}: +${scene.missionReward} ◇`,
+        ),
+      );
+      const next = nextLevel(scene.level, levels.length);
+      if (next)
+        p.append(
+          button(
+            `${t().next} → ${next}`,
+            () => {
+              selected = next;
+              launch();
+            },
+            false,
+            true,
+          ),
+        );
+      else p.append(text(t().campaign));
+    }
     p.append(
-      text(`${result.score} · ${save.crystals} ◇`),
-      button(
-        t().back,
-        () => {
-          selected = save.checkpoint;
-          show("home");
-        },
-        false,
-        true,
-      ),
+      button(t().hangar, () => show("hangar")),
+      button(t().back, () => {
+        selected = save.checkpoint;
+        show("home");
+      }),
     );
+  }
   requestAnimationFrame(() => {
     p.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({
       preventScroll: true,
